@@ -1,14 +1,14 @@
-use crate::agent::{self, AgentEvent, OllamaClient};
-// use crate::mcp::{McpClient, McpTool};
+use crate::agent::{self, OllamaApi, AgentEvent};
+use crate::tools::ToolRegistry;
 use anyhow::Result;
 use crossterm::event::KeyCode;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 /// One entry in the chat transcript.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum Line {
     User(String),
     Assistant(String),
@@ -28,72 +28,52 @@ pub struct App {
 
     /// Conversation history in Ollama Messages API format. Persists
     /// across turns so the agent has memory of the conversation.
-    history: Vec<Value>,
-    /// Tool definitions in Ollama/OpenAI `tools` format, derived once from
-    /// the MCP server's `tools/list` response.
+    pub history: Vec<Value>,
     tools_json: Vec<Value>,
 
-    // mcp: Arc<Mutex<McpClient>>,
-    ollama: Arc<OllamaClient>,
+    registry: Arc<ToolRegistry>,
+    ollama: Arc<dyn OllamaApi>,
 
     agent_tx: mpsc::UnboundedSender<AgentEvent>,
     pub agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
 }
 
 impl App {
-    /// Spawn the MCP server, perform the handshake, fetch its tool list,
-    /// and set up the Ollama client. Reads configuration from env vars
-    /// (a `.env` file in the working directory is loaded automatically by
-    /// `main`):
+    /// Public async constructor used by main.rs.  Reads configuration from
+    /// env vars (a `.env` file is loaded automatically by `main`).
     ///
     /// - `OLLAMA_HOST`  (default: "http://localhost:11434")
-    /// - `OLLAMA_MODEL` (default: "qwen2.5", must be a model that supports
-    ///                   tool calling -- e.g. qwen2.5, llama3.1+, mistral-nemo)
-    /// - `MCP_SERVER_COMMAND` (default: "npx")
-    /// - `MCP_SERVER_ARGS`    (default: "-y @awesome-ai/elasticsearch-mcp",
-    ///                         space-separated)
-    /// Any `ES_HOST`, `ES_API_KEY` (or `ES_USERNAME`/`ES_PASSWORD`) env vars
-    /// used by the Elasticsearch MCP server should already be set (shell or
-    /// `.env`) -- they are inherited by the spawned process automatically.
+    /// - `OLLAMA_MODEL` (default: "qwen2.5")
     pub async fn new() -> Result<Self> {
         let ollama_host =
             env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://localhost:11434".to_string());
         let ollama_model = env::var("OLLAMA_MODEL").unwrap_or_else(|_| "qwen2.5".to_string());
 
-        let command = env::var("MCP_SERVER_COMMAND").unwrap_or_else(|_| "npx".to_string());
-        let args: Vec<String> = env::var("MCP_SERVER_ARGS")
-            .unwrap_or_else(|_| "-y @awesome-ai/elasticsearch-mcp".to_string())
-            .split_whitespace()
-            .map(String::from)
-            .collect();
-
-        // let mut mcp = McpClient::spawn(&command, &args, &[]).await?;
-        // mcp.initialize().await?;
-        // let tools = mcp.list_tools().await?;
-        let tools = vec![];
-        // let tools_json = tools.iter().map(mcp_tool_to_ollama_tool).collect();
-        let tools_json = tools.clone();
-        // let tool_count = tools.len();
-        let tool_count = tools.len();
-
+        let registry = Arc::new(ToolRegistry::new());
+        let ollama = Arc::new(agent::OllamaClient::new(ollama_host, ollama_model));
         let (agent_tx, agent_rx) = mpsc::unbounded_channel();
 
-        let mut transcript = vec![Line::System(format!(
-            "Connected to MCP server `{command} {}` -- {tool_count} tool(s) available.",
-            args.join(" ")
-        ))];
-        // if tool_count > 0 {
-        //     // let names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        //     transcript.push(Line::System(format!("Tools: {}", names.join(", "))));
-        // }
-        // transcript.push(Line::System(format!(
-        //     "Using Ollama model `{ollama_model}` at {ollama_host}."
-        // )));
-        // transcript.push(Line::System(
-        //     "Type a message and press Enter. Esc to quit.".to_string(),
-        // ));
+        Ok(Self::new_with(registry, ollama as Arc<dyn OllamaApi>, agent_tx, agent_rx))
+    }
 
-        Ok(Self {
+    /// Injectable constructor for tests.  Takes an already-built registry,
+    /// API client, and channel pair.
+    pub fn new_with(
+        registry: Arc<ToolRegistry>,
+        ollama: Arc<dyn OllamaApi>,
+        agent_tx: mpsc::UnboundedSender<AgentEvent>,
+        agent_rx: mpsc::UnboundedReceiver<AgentEvent>,
+    ) -> Self {
+        let tool_count = registry.len();
+        let tools_json = registry.to_ai_tools();
+
+        let mut transcript = vec![];
+        transcript.push(Line::System(format!(
+            "Registered {tool_count} local tool(s)"
+        )));
+        transcript.push(Line::System("Using Ollama model ...".to_string()));
+
+        Self {
             input: String::new(),
             transcript,
             scroll: 0,
@@ -102,11 +82,11 @@ impl App {
             tool_count,
             history: vec![],
             tools_json,
-            // mcp: Arc::new(Mutex::new(mcp)),
-            ollama: Arc::new(OllamaClient::new(ollama_host, ollama_model)),
+            registry,
+            ollama,
             agent_tx,
             agent_rx,
-        })
+        }
     }
 
     /// Handle a key press. Returns `Ok(())`; sets `should_quit` when the
@@ -125,7 +105,7 @@ impl App {
         }
     }
 
-    fn submit(&mut self) {
+    pub fn submit(&mut self) {
         if self.processing {
             return;
         }
@@ -145,11 +125,10 @@ impl App {
         let history = self.history.clone();
         let tools_json = self.tools_json.clone();
         let ollama = self.ollama.clone();
-        // let mcp = self.mcp.clone();
+        let registry = self.registry.clone();
         let tx = self.agent_tx.clone();
 
-        // tokio::spawn(agent::run_turn(history, tools_json, ollama, mcp, tx));
-        tokio::spawn(agent::run_turn(history, tools_json, ollama, tx));
+        tokio::spawn(agent::run_turn(history, tools_json, ollama, registry, tx));
     }
 
     /// Apply an event coming back from the background agent task.
@@ -170,18 +149,170 @@ impl App {
     }
 }
 
-/*
-/// Convert an MCP tool definition into the shape Ollama's `tools` parameter
-/// expects: an OpenAI-style `{type: "function", function: {name,
-/// description, parameters}}` wrapper around the tool's JSON Schema.
-// fn mcp_tool_to_ollama_tool(tool: &McpTool) -> Value {
-//     json!({
-//         "type": "function",
-//         "function": {
-//             "name": tool.name,
-//             "description": tool.description,
-//             "parameters": tool.input_schema,
-//         }
-//     })
-// }
-*/
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::OllamaApi;
+    use crate::tools::ToolRegistry;
+    use crossterm::event::KeyCode;
+    use serde_json::json;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+
+    struct NoopOllama;
+    #[async_trait::async_trait]
+    impl OllamaApi for NoopOllama {
+        async fn messages(&self, _: &[Value], _: &[Value]) -> anyhow::Result<Value> {
+            Ok(json!({}))
+        }
+    }
+
+    fn make_app() -> App {
+        let registry = Arc::new(ToolRegistry::new());
+        let ollama = Arc::new(NoopOllama);
+        let (tx, rx) = mpsc::unbounded_channel();
+        App::new_with(registry, ollama as Arc<dyn OllamaApi>, tx, rx)
+    }
+
+    #[test]
+    fn new_with_sets_initial_state() {
+        let app = make_app();
+        assert!(app.input.is_empty());
+        assert!(!app.transcript.is_empty());
+        assert_eq!(app.scroll, 0);
+        assert!(!app.processing);
+        assert!(!app.should_quit);
+        assert_eq!(app.tool_count, 3);
+        assert!(app.history.is_empty());
+    }
+
+    #[test]
+    fn esc_sets_should_quit() {
+        let mut app = make_app();
+        app.handle_key(KeyCode::Esc);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn backspace_pops_char() {
+        let mut app = make_app();
+        app.input.push_str("hello");
+        app.handle_key(KeyCode::Backspace);
+        assert_eq!(app.input, "hell");
+    }
+
+    #[test]
+    fn char_appends_input() {
+        let mut app = make_app();
+        app.handle_key(KeyCode::Char('x'));
+        assert_eq!(app.input, "x");
+    }
+
+    #[test]
+    fn up_adjusts_scroll() {
+        let mut app = make_app();
+        app.scroll = 5;
+        app.handle_key(KeyCode::Up);
+        assert_eq!(app.scroll, 4);
+    }
+
+    #[test]
+    fn down_adjusts_scroll() {
+        let mut app = make_app();
+        app.scroll = 5;
+        app.handle_key(KeyCode::Down);
+        assert_eq!(app.scroll, 6);
+    }
+
+    #[test]
+    fn up_saturates_at_zero() {
+        let mut app = make_app();
+        app.scroll = 0;
+        app.handle_key(KeyCode::Up);
+        assert_eq!(app.scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn submit_noop_when_processing() {
+        let mut app = make_app();
+        app.processing = true;
+        app.input.push_str("hello");
+        app.submit();
+        assert_eq!(app.input, "hello");
+        assert!(app.history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn submit_noop_when_empty() {
+        let mut app = make_app();
+        app.input.clear();
+        app.submit();
+        assert!(!app.processing);
+    }
+
+    #[tokio::test]
+    async fn submit_adds_user_line() {
+        let mut app = make_app();
+        app.input.push_str("hi there");
+        app.submit();
+
+        assert!(app.input.is_empty());
+        assert!(app.processing);
+        assert_eq!(app.history.len(), 1);
+        assert_eq!(app.history[0]["role"], "user");
+        assert_eq!(app.history[0]["content"], "hi there");
+
+        let user_line = app
+            .transcript
+            .iter()
+            .find(|l| matches!(l, Line::User(_)))
+            .unwrap();
+        match user_line {
+            Line::User(text) => assert_eq!(text, "hi there"),
+            _ => panic!("expected User line"),
+        }
+    }
+
+    #[tokio::test]
+    async fn submit_trims_input() {
+        let mut app = make_app();
+        app.input.push_str("  spaced  ");
+        app.submit();
+        assert_eq!(app.history[0]["content"], "spaced");
+    }
+
+    #[test]
+    fn handle_agent_event_line_appends() {
+        let mut app = make_app();
+        let before = app.transcript.len();
+        app.handle_agent_event(AgentEvent::Line(Line::Assistant("test".into())));
+        assert_eq!(app.transcript.len(), before + 1);
+        match app.transcript.last().unwrap() {
+            Line::Assistant(text) => assert_eq!(text, "test"),
+            _ => panic!("expected Assistant"),
+        }
+        assert_eq!(app.scroll, u16::MAX);
+    }
+
+    #[test]
+    fn handle_agent_event_done_updates_history() {
+        let mut app = make_app();
+        app.processing = true;
+        let new_history = vec![json!({"role": "assistant", "content": "done"})];
+        app.handle_agent_event(AgentEvent::Done(new_history.clone()));
+        assert!(!app.processing);
+        assert_eq!(app.history, new_history);
+    }
+
+    #[test]
+    fn handle_agent_event_failed_appends_error() {
+        let mut app = make_app();
+        app.processing = true;
+        app.handle_agent_event(AgentEvent::Failed("boom".into()));
+        assert!(!app.processing);
+        match app.transcript.last().unwrap() {
+            Line::Error(text) => assert_eq!(text, "boom"),
+            _ => panic!("expected Error"),
+        }
+    }
+}

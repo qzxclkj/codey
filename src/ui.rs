@@ -1,10 +1,10 @@
 use crate::app::{App, Line as ChatLine};
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
-    Frame,
 };
 
 pub fn draw(f: &mut Frame, app: &mut App) {
@@ -45,12 +45,12 @@ fn draw_header(f: &mut Frame, app: &App, area: Rect) {
 
     let line = Line::from(vec![
         Span::styled(
-            " Elasticsearch AI Agent ",
+            " Codey AI Agent ",
             Style::default()
                 .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(format!("· {} MCP tool(s) ", app.tool_count)),
+        Span::raw(format!("· {} tool(s) ", app.tool_count)),
         status,
     ]);
 
@@ -103,9 +103,7 @@ fn draw_history(f: &mut Frame, app: &mut App, area: Rect) {
             ChatLine::System(text) => {
                 lines.push(Line::from(Span::styled(
                     format!("  {text}"),
-                    Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(Color::Blue).add_modifier(Modifier::DIM),
                 )));
             }
         }

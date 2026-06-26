@@ -15,3 +15,8 @@ futures = "0.3"
 indexmap = "=2.2.6"
 url = "=2.5.0"
 dotenvy = "0.15.7"
+async-trait = "0.1"
+
+[dev-dependencies]
+tempfile = "3"
+mockall = "0.13"

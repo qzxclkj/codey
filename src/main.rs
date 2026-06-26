@@ -1,5 +1,6 @@
 mod agent;
 mod app;
+mod tools;
 mod ui;
 
 use anyhow::Result;
@@ -48,8 +49,6 @@ fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result
 }
 
 async fn run(terminal: &mut Terminal<CrosstermBackend<Stdout>>) -> Result<()> {
-    // This performs the MCP handshake + tools/list, so the first frame
-    // already shows which MCP tools are available.
     let mut app = App::new().await?;
 
     let mut events = EventStream::new();
