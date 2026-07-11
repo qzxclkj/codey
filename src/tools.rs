@@ -1,6 +1,7 @@
 pub mod list_files;
 pub mod read_file;
 pub mod write_file;
+pub mod search_files;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -25,6 +26,7 @@ impl ToolRegistry {
         reg.register(Box::new(list_files::ListFiles));
         reg.register(Box::new(read_file::ReadFile));
         reg.register(Box::new(write_file::WriteFile));
+        reg.register(Box::new(search_files::SearchFiles));
         reg
     }
 
@@ -78,15 +80,15 @@ mod tests {
     #[test]
     fn new_contains_three_tools() {
         let reg = ToolRegistry::new();
-        assert_eq!(reg.len(), 3);
+        assert_eq!(reg.len(), 4);
     }
 
     #[test]
     fn register_increases_len() {
         let mut reg = ToolRegistry::new();
-        assert_eq!(reg.len(), 3);
-        reg.register(Box::new(list_files::ListFiles));
         assert_eq!(reg.len(), 4);
+        reg.register(Box::new(list_files::ListFiles));
+        assert_eq!(reg.len(), 5);
     }
 
     #[test]
@@ -128,7 +130,7 @@ mod tests {
     fn to_ai_tools_format() {
         let reg = ToolRegistry::new();
         let tools = reg.to_ai_tools();
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
 
         for tool_val in &tools {
             assert_eq!(tool_val["type"], "function");
@@ -145,5 +147,6 @@ mod tests {
         assert!(names.contains(&"read_file"));
         assert!(names.contains(&"write_file"));
         assert!(names.contains(&"list_files"));
+        assert!(names.contains(&"search_files"));
     }
 }
