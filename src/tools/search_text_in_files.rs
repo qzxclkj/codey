@@ -8,11 +8,11 @@ use serde_json::Value;
 
 const MAX_DEPTH: usize = 10;
 
-pub struct SearchFiles;
+pub struct SearchTextInFiles;
 
-impl super::Tool for SearchFiles {
+impl super::Tool for SearchTextInFiles {
     fn name(&self) -> &str {
-        "search_files"
+        "search_text_in_files"
     }
 
     fn description(&self) -> &str {
@@ -135,18 +135,18 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn name_returns_search_files() {
-        assert_eq!(SearchFiles.name(), "search_files");
+    fn name_returns_search_text_in_files() {
+        assert_eq!(SearchTextInFiles.name(), "search_text_in_files");
     }
 
     #[test]
     fn description_not_empty() {
-        assert!(!SearchFiles.description().is_empty());
+        assert!(!SearchTextInFiles.description().is_empty());
     }
 
     #[test]
     fn input_schema_requires_query() {
-        let schema = SearchFiles.input_schema();
+        let schema = SearchTextInFiles.input_schema();
         assert_eq!(schema["type"], "object");
         assert!(schema["properties"].get("query").is_some());
         assert!(schema["properties"].get("root").is_some());
@@ -160,7 +160,7 @@ mod tests {
         fs::create_dir(dir.path().join("sub")).unwrap();
         fs::write(dir.path().join("sub").join("b.txt"), "another hello here").unwrap();
 
-        let result = SearchFiles
+        let result = SearchTextInFiles
             .execute(json!({"query": "hello", "root": dir.path().to_str().unwrap()}))
             .await
             .unwrap();
@@ -175,7 +175,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("a.txt"), "HELLO world").unwrap();
 
-        let result = SearchFiles
+        let result = SearchTextInFiles
             .execute(json!({
                 "query": "hello",
                 "root": dir.path().to_str().unwrap(),
@@ -190,7 +190,7 @@ mod tests {
     #[tokio::test]
     async fn execute_empty_query_returns_empty() {
         let dir = tempfile::tempdir().unwrap();
-        let result = SearchFiles
+        let result = SearchTextInFiles
             .execute(json!({"query": "", "root": dir.path().to_str().unwrap()}))
             .await
             .unwrap();

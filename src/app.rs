@@ -182,7 +182,7 @@ mod tests {
         assert_eq!(app.scroll, 0);
         assert!(!app.processing);
         assert!(!app.should_quit);
-        assert_eq!(app.tool_count, 3);
+        assert_eq!(app.tool_count, 5);
         assert!(app.history.is_empty());
     }
 
